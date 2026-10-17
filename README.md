@@ -6,11 +6,16 @@
 - **Track 02:**
   - A caregiver assistant hands safety questions to the checker agent.
   - Every check and answer is stored in the graph as `:Session`/`:Action` nodes.
-  - Accounts, invites, refresh tokens and access all live in the graph. A user (caregiver or clinician) sees only the patients they `CARES_FOR`, and each session is pinned to one patient.
+  - Accounts, access requests, refresh tokens and access itself all live in the graph. A user (patient, caregiver or clinician) sees only the patients they `CARES_FOR`, and each session is pinned to one patient.
   - Clinician decisions are `REVIEWED` edges, and the graph only allows them from the logged-in clinician on that patient's care team.
   - In the next session, both agents recall earlier decisions. For example: "Dr. Rao decided NOT to start Biaxin: don't raise it again without new information".
 
-A medication safety checker for **family caregivers**. Think of Priya, who looks after her mother Kamala (78, five medicines, three doctors). Before Kamala takes something new, even an over-the-counter Advil or NyQuil, Priya asks the assistant. It walks a FalkorDB knowledge graph to find conflicts, shows the **chain of links behind every warning**, names **who to call**, and suggests options that conflict less. Every check stays **pending until a clinician on the patient's care team approves or rejects it**, and that decision is remembered in the graph for next time.
+A medication safety checker for **patients and family caregivers**, with a web app, an HTTP API and a CLI. Think of Priya, who looks after her mother Kamala (78, five medicines, three doctors). Before Kamala takes something new, even an over-the-counter Advil or NyQuil, Priya asks the assistant. It walks a FalkorDB knowledge graph to find conflicts, shows the **chain of links behind every warning**, names **who to call**, and suggests options that conflict less. Every check stays **pending until a clinician on the patient's care team approves or rejects it**, and that decision is remembered in the graph for next time.
+
+| | |
+|---|---|
+| ![Safety check for Advil with graph paths](docs/screenshots/check-advil.png) | ![Pharmacist review queue](docs/screenshots/clinician-review.png) |
+| ![Doctor approving an access request](docs/screenshots/doctor-requests.png) | ![Phone layout](docs/screenshots/mobile.png) |
 
 > **Not medical advice.** The seed data is a small, simplified, illustrative set based on public drug labeling. It is not a clinical reference and must not be used for real decisions. The agents only flag and explain; they never tell anyone to start, stop or change a medicine.
 
@@ -58,7 +63,7 @@ All of these are listed, ready for the Browser, in [`queries.md`](queries.md).
 ## How it works
 
 ```
-CLI (npm start) ──HTTP + Bearer JWT──▶ API (npm run server) ──▶ FalkorDB graph "meds"
+web app or CLI ──HTTP + Bearer JWT──▶ API + web server (npm start) ──▶ FalkorDB graph "meds"
 
 register / login → access token (15 min) + refresh token (7 days, rotated)
 pick a patient you CARES_FOR → POST /sessions → new access token pinned to that patient
@@ -82,7 +87,25 @@ The LLM never decides the level. It routes questions and rephrases. The safety l
 
 **Identity is the person, not the patient.** You log in as a caregiver or clinician. Patient IDs are printed on cards and letters and are often guessable, so they are not secrets. One caregiver can also look after several people.
 
-**Registration** (`/register`) creates a *caregiver* account with **no patients**. Clinician accounts can't be self-registered, because a clinician can approve medicines; an administrator creates them. To join a care team, a clinician on that team runs `/invite` and gets a one-time code (e.g. `7KQ2-M9XD`, valid 7 days, stored hashed). The caregiver redeems it with `/join <code>`, which creates their `CARES_FOR` edge.
+**Registration** creates one of two account types, each starting with access to nobody else:
+
+- **Patient:** manages their own record. It's a `:Patient` node with a login and a `CARES_FOR` edge to itself. Age is required, because the age rules need it.
+- **Caregiver:** a family member or friend. Starts with **no patients**.
+
+Clinician accounts can't be self-registered, because a clinician can approve medicines; an administrator creates them.
+
+**Access is requested and approved, never self-granted** (`(:AccessRequest)-[:FROM]->(user)`, `-[:TO]->(:Clinician)`):
+
+1. **Picking a doctor:** the user picks one from the **doctor directory**, which shows each doctor's role and how many patients they have.
+2. **A patient asks a doctor to join their care team.** On approval, the graph gets `(doctor)-[:CARES_FOR]->(patient)`. One doctor can care for any number of patients.
+3. **A caregiver asks a doctor for access to someone they look after, giving that person's name.** They can't search for patients. The doctor sees the request and chooses the matching person **from the doctor's own patients**. On approval, the graph gets `(caregiver)-[:CARES_FOR]->(patient)`.
+4. **The doctor's inbox:** doctors see pending requests and approve or decline them; declining needs a reason, which the requester sees. Duplicate pending requests are refused, and each request can be decided only once.
+
+**The record is editable, and every change records who made it.**
+
+- Patients and caregivers can add over-the-counter medicines and allergies.
+- Doctors add prescriptions (recorded as `PRESCRIBED` by them) and diagnoses, and can stop any medicine.
+- In the web app, a new medicine is **checked before it's added**. The safety verdict is shown first, and adding it is a separate click.
 
 **Tokens** (HS256 JWT, signed with `node:crypto`; no extra dependencies):
 
@@ -103,7 +126,7 @@ The LLM never decides the level. It routes questions and rephrases. The safety l
 
 **Approvals** act as the logged-in clinician, only for the current session's patient, and only once per check. Caregivers can't approve.
 
-Demo logins (password is `<username>-demo`, e.g. `priya-demo`):
+Demo logins (password is `<username>-demo`, e.g. `priya-demo`). All of them are listed on the sign-in page.
 
 | username | who | can see |
 |---|---|---|
@@ -112,15 +135,35 @@ Demo logins (password is `<username>-demo`, e.g. `priya-demo`):
 | `rao` | Dr. Meera Rao, primary care | Kamala, Ravi |
 | `ortiz` | Dr. Lena Ortiz, cardiologist | Kamala |
 | `shah` | Arjun Shah, pharmacist | Kamala, Ravi |
+| `menon` | Dr. Kavita Menon, geriatrician | nobody yet: request her |
+| `okafor` | Dr. Samuel Okafor, endocrinologist | nobody yet: request him |
+
+Plus 22 more specialists in the directory, all starting with no patients and all signing in as `<username>` / `<username>-demo`:
+
+| username | specialty | username | specialty |
+|---|---|---|---|
+| `desai` | Nephrologist | `idrissi` | Orthopedic surgeon |
+| `feld` | Neurologist | `asante` | Urologist |
+| `rahman` | Psychiatrist | `mlwong` | Ophthalmologist |
+| `herrera` | Pulmonologist | `nolan` | ENT specialist |
+| `tanaka` | Gastroenterologist | `ribeiro` | Hematologist |
+| `mwangi` | Rheumatologist | `karimi` | Allergist and immunologist |
+| `brandt` | Dermatologist | `carter` | Family medicine physician |
+| `haddad` | Oncologist | `sethi` | Internal medicine physician |
+| `pillai` | Infectious disease specialist | `martin` | Emergency medicine physician |
+| `lindqvist` | Obstetrician-gynecologist | `novak` | Pain medicine specialist |
+| `cohen` | Pediatrician | `petrova` | Clinical pharmacist |
+
+The web directory has a search box (name or specialty).
 
 API (JSON):
 
 | | |
 |---|---|
 | public | `POST /auth/register` `POST /auth/login` `POST /auth/refresh` `POST /auth/logout` |
-| logged in | `GET /me` `POST /sessions` `POST /invites/accept` |
-| with a patient session | `GET /patient` `POST /ask` `POST /check` `GET /history?drug=` |
-| clinicians | `GET /pending` `POST /reviews` `POST /invites` |
+| logged in | `GET /me` `POST /sessions` `GET /catalog` `GET /clinicians` `POST /requests` `GET /requests` |
+| with a patient session | `GET /patient` `POST /ask` `POST /check` `GET /history?drug=` `POST /patient/medications` `POST /patient/medications/stop` `POST /patient/allergies` `POST /patient/conditions` (clinician) |
+| clinicians | `POST /requests/decide` `GET /pending` `POST /reviews` |
 
 ## Run it
 
@@ -130,33 +173,20 @@ Requires Node.js 20+ and FalkorDB (`docker run -p 6381:6379 -p 3000:3000 -it --r
 cp .env.example .env      # set JWT_ACCESS_SECRET / JWT_REFRESH_SECRET (openssl rand -hex 32); optional LLM key
 npm install
 npm run seed              # resets graph "meds" and loads seed.cypher
-npm run demo              # scripted story (starts its own API): register + invite, JWT, scoping, review, token reuse, memory
-npm run server            # terminal 1: the API on http://127.0.0.1:8787
-npm start                 # terminal 2: the CLI
+npm run demo              # scripted story (starts its own API): requests + approvals, JWT, scoping, review, token reuse, memory
+npm start                 # web app + API on http://127.0.0.1:8787  (open it in a browser)
+npm run cli               # optional: the terminal client (needs npm start running)
 npm run check             # lint + unit tests + live integration and API tests (throwaway graphs)
 ```
 
-Try in `npm start`. `/login` as `priya` / `priya-demo` and pick Kamala:
+Try it in the browser (`npm start`, then open http://127.0.0.1:8787):
 
-```
-What is she taking?
-Can she take Advil for her headache?
-Is NyQuil okay?
-/check Amoxil
-/history NyQuil
-/switch 2                 # now everything is about Ravi
-/logout
-```
+1. **Caregiver:** sign in as `priya` and pick Kamala. Check **Advil** (STOP: blood thinner and kidney disease) and **NyQuil** (CAUTION: doubled acetaminophen and the age rule). Ask the assistant "What did we decide about Biaxin?".
+2. **Pharmacist:** sign in as `shah`, pick Kamala and open **Review queue**. Reject NyQuil with a note, then sign back in as `priya` and look at **History**.
+3. **New patient:** on **Create account**, choose "The patient", then request **Dr. Okafor**. Sign in as `okafor`, open **Requests** and approve. Back as the patient, use **Add** on Advil to see the check-before-add flow.
+4. **New caregiver:** register as "Looking after someone" and request **Dr. Rao** for "Ravi Iyer". As `rao`, approve and link Ravi.
 
-`/login` as `rao` / `rao-demo` (doctor), pick Kamala, and run `/invite`. Then `/logout`, `/register` a new caregiver and `/join <code>`.
-
-`/login` as `shah` / `shah-demo` (pharmacist), pick Kamala:
-
-```
-/pending
-/reject act-xxxx -- Doubles up on acetaminophen; use Mucinex
-/approve act-xxxx -- OK for 5 days, recheck INR
-```
+The CLI (`npm run cli`) has the same features: `/login`, `/register`, `/doctors`, `/request <n>`, `/requests`, `/accept <id> [patient n]`, `/decline <id> -- reason`, `/check <drug>`, `/add <drug> -- dose`, `/history`, `/pending`, `/approve`, `/reject`.
 
 ## Roadmap to real-world use
 

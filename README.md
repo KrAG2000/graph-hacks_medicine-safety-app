@@ -1,4 +1,8 @@
-# Medication Safety Graph — Graph Hacks (FalkorDB)
+# Medication Safety Graph: Graph Hacks (FalkorDB)
+
+**[Live app](https://graph-hacks-medicine-safety-app-amber.vercel.app/)** · **[Demo video](https://youtu.be/wKzizR8iS9Y)** · **[Blog post](https://medium.com/@agni5kartik/can-mum-take-an-advil-building-a-medication-safety-checker-on-a-knowledge-graph-fca111808bb2)**
+
+Demo logins: `priya`, `shah`, `okafor`, `rao` (password: `<username>-demo`).
 
 **Tracks entered: 01 (Act on Connected Data) and 02 (Memory & Coordination).**
 
@@ -190,9 +194,9 @@ The CLI (`npm run cli`) has the same features: `/login`, `/register`, `/doctors`
 
 ## Roadmap to real-world use
 
-1. **Real drug data.** Use RxNorm for drug, ingredient and brand identity, and openFDA/DailyMed for label text. Interaction data from NLM is free; licensed sources (e.g. DrugBank, First Databank) are fuller. Load it with `MERGE` and record provenance (`source`, `version`, `retrieved_at`) on every edge.
+1. **Real drug data.** Use RxNorm for drug, ingredient and brand identity, and openFDA/DailyMed for label text. NLM retired its free interaction API in 2024, so interactions need DDInter (non-commercial) or a licensed source (e.g. DrugBank, First Databank). Load it with `MERGE` and record provenance (`source`, `version`, `retrieved_at`) on every edge.
 2. **Name matching.** Use RxNorm normalisation plus fuzzy or vector matching so "tylenol extra strength 500" resolves to the right product.
 3. **Dose awareness.** Add daily dose totals, for example summing acetaminophen across all products against the daily limit.
 4. **Check the whole list.** Review the current medicines against each other, not only a new one (e.g. Ravi's Aleve + aspirin).
-5. **Privacy and access.** Follow HIPAA/GDPR: encrypt the data and require the patient's consent before a caregiver gets a `CARES_FOR` edge. Add MFA, HTTPS, a shared store (e.g. Redis) for login throttling across servers, secret rotation, and a web UI. The audit log is already modelled as Actions. Use a self-hosted LLM if needed (`OPENAI_BASE_URL`).
+5. **Privacy and access.** Follow HIPAA/GDPR: encrypt the data and require the patient's consent before a caregiver gets a `CARES_FOR` edge. Add MFA, HTTPS, a shared store (e.g. Redis) for login throttling across servers and secret rotation. The audit log is already modelled as Actions. Use a self-hosted LLM if needed (`OPENAI_BASE_URL`).
 6. **Clinical validation.** Have a pharmacist review the rules and the wording before anyone relies on it.

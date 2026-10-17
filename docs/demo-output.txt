@@ -1,0 +1,102 @@
+API http://127.0.0.1:40055, LLM provider: offline
+
+=== 1. A new patient registers and asks a doctor to join her care team ===
+registered lena (patient)
+lena's own record: ["Lena Fischer"]
+doctor directory: 27 clinicians, e.g. Arjun Shah (Pharmacist, 2 patients); Dr. Aisha Rahman (Psychiatrist, 0 patients); Dr. Ana Ribeiro (Hematologist, 0 patients); Dr. Chloe Martin (Emergency medicine physician, 0 patients); Dr. Daniel Cohen (Pediatrician, 0 patients); Dr. Emily Carter (Family medicine physician, 0 patients) …
+lena asks Dr. Menon -> allowed
+lena asks Dr. Menon again while pending -> refused (409 already_requested)
+Dr. Menon's inbox: Lena Fischer (Patient, 72): self
+approved -> Dr. Menon now cares for Lena Fischer
+Dr. Menon records a stomach ulcer and prescribes Tylenol
+
+Lena Fischer → Lena Fischer> Can I take Advil for my knees?
+   [tool check_medication] {"drug":"advil"} (patient Lena Fischer)
+   [handoff assistant -> checker] Lena Fischer + advil
+   [checker] level=stop findings=1 action=act-264af787
+Lena Fischer + Advil (Ibuprofen): STOP. Do not start this until a clinician confirms it is safe.
+- [MAJOR] NSAIDs can cause stomach bleeding and make ulcers worse.
+    why: Advil → ibuprofen → [NSAIDs] → CONTRAINDICATED_IN → Stomach ulcer
+Options in the graph with no major conflicts: Tylenol (already taking). Ask the clinician before switching.
+(Recorded as act-264af787; a clinician on the care team must review it.)
+
+=== 2. A caregiver asks Dr. Rao for access to someone she looks after ===
+registered neha (caregiver)
+neha can see: []
+neha opens Kamala's record before approval -> refused (403 forbidden)
+Dr. Rao sees: Neha Kapoor looks after "Kamala Iyer" (neighbour); Dr. Rao's patients: Kamala Iyer, Ravi Iyer
+
+Neha Kapoor → Kamala Iyer> What is she taking?
+   [tool patient_info] {"topic":"medications"} (patient Kamala Iyer)
+medications:
+brand: Coumadin | drug: Warfarin | dose: 5 mg daily | prescriber: Dr. Lena Ortiz
+brand: Glucophage | drug: Metformin | dose: 500 mg twice daily | prescriber: Dr. Meera Rao
+brand: Zestril | drug: Lisinopril | dose: 10 mg daily | prescriber: Dr. Meera Rao
+brand: Lipitor | drug: Atorvastatin | dose: 20 mg nightly | prescriber: Dr. Lena Ortiz
+brand: Tylenol | drug: Acetaminophen | dose: 500 mg as needed | otc: true
+
+=== 3. Priya logs in (JWT access + refresh) and asks about her mother ===
+access token: typ=access sub=cg-priya expires in 900s, patient=null
+after picking a patient: patient=pt-kamala session=sess-b33049e2
+
+Priya Iyer → Kamala Iyer> She has a bad headache. Can she take Advil?
+   [tool check_medication] {"drug":"advil"} (patient Kamala Iyer)
+   [handoff assistant -> checker] Kamala Iyer + advil
+   [checker] level=stop findings=3 action=act-bee378aa
+Kamala Iyer + Advil (Ibuprofen): STOP. Do not start this until a clinician confirms it is safe.
+- [MAJOR] An NSAID taken with a blood thinner sharply raises the risk of serious bleeding, including stomach bleeding.
+    why: Advil → ibuprofen → [NSAIDs] ⟷ [Anticoagulants (blood thinners)] ← warfarin ← Coumadin
+- [MAJOR] NSAIDs can reduce blood flow to the kidneys and worsen kidney disease.
+    why: Advil → ibuprofen → [NSAIDs] → CONTRAINDICATED_IN → Chronic kidney disease
+- [MODERATE] NSAIDs can weaken blood-pressure control and, together with ACE inhibitors, raise the risk of kidney injury.
+    why: Advil → ibuprofen → [NSAIDs] ⟷ [ACE inhibitors] ← lisinopril ← Zestril
+Who to contact: Dr. Lena Ortiz (prescribed Coumadin); Dr. Meera Rao (prescribed Zestril); Arjun Shah (Pharmacist).
+Options in the graph with no major conflicts: Tylenol (already taking). Ask the clinician before switching.
+(Recorded as act-bee378aa; a clinician on the care team must review it.)
+
+Priya Iyer → Kamala Iyer> She also has a cold. Is NyQuil okay?
+   [tool check_medication] {"drug":"nyquil"} (patient Kamala Iyer)
+   [handoff assistant -> checker] Kamala Iyer + nyquil
+   [checker] level=caution findings=2 action=act-455bc927
+Kamala Iyer + NyQuil (NyQuil Cold & Flu): CAUTION. Check with the pharmacist or prescriber before starting.
+- [MODERATE] Can cause confusion, drowsiness, constipation and falls in older adults (AGS Beers Criteria).
+    why: NyQuil → doxylamine → [First-generation antihistamines] → CAUTION_IN → Older adults (65+)
+- [MODERATE] Same ingredient as Tylenol. The total from all products must stay under the daily limit on the label; too much can cause liver damage.
+    why: NyQuil → acetaminophen ← Tylenol
+Who to contact: Arjun Shah (Pharmacist); Dr. Meera Rao (Primary care physician).
+Options in the graph with no major conflicts: Mucinex. Ask the clinician before switching.
+(Recorded as act-455bc927; a clinician on the care team must review it.)
+
+=== 4. Scoping: Sam cares only for his father ===
+sam opens Kamala's record -> refused (403 forbidden)
+
+=== 5. Pharmacist Arjun Shah reviews Kamala's pending checks ===
+  act-455bc927 NyQuil caution (asked by Priya Iyer)
+  act-bee378aa Advil stop (asked by Priya Iyer)
+  rejected act-455bc927: "Do not use NyQuil: doubles up on acetaminophen with her Tylenol. Use Mucinex for the cold."
+Priya (a caregiver) approves it anyway -> refused (403 forbidden)
+
+=== 6. Refresh-token rotation and reuse detection ===
+refreshed: new refresh token issued (true), session kept (Kamala Iyer)
+attacker replays the OLD refresh token -> 401 refresh token already used; please log in again
+Priya's current refresh token after the replay (whole login revoked) -> refused (401 session_ended)
+
+=== 7. Priya logs in again next day: memory from the graph ===
+
+Priya Iyer → Kamala Iyer> What did we decide about NyQuil?
+   [tool recall_history] {"drug":"nyquil"} (patient Kamala Iyer)
+2026-10-17 NyQuil: checker said CAUTION, decision: rejected by Arjun Shah: "Do not use NyQuil: doubles up on acetaminophen with her Tylenol. Use Mucinex for the cold."
+
+Priya Iyer → Kamala Iyer> Her doctor mentioned Biaxin for an infection. Can she take it?
+   [tool check_medication] {"drug":"biaxin"} (patient Kamala Iyer)
+   [handoff assistant -> checker] Kamala Iyer + biaxin
+   [checker] level=stop findings=2 action=act-070d3b99
+Kamala Iyer + Biaxin (Clarithromycin): STOP. Do not start this until a clinician confirms it is safe.
+Earlier decision: Dr. Meera Rao decided NOT to start this (2026-09-02): "Not starting clarithromycin. Prescribed azithromycin for the sinus infection instead." Do not raise it again without new information.
+- [MAJOR] Clarithromycin raises atorvastatin levels, increasing the risk of serious muscle damage (rhabdomyolysis).
+    why: Biaxin → clarithromycin ⟷ atorvastatin ← Lipitor
+- [MODERATE] Can raise INR and bleeding risk; INR usually needs closer monitoring.
+    why: Biaxin → clarithromycin ⟷ [Anticoagulants (blood thinners)] ← warfarin ← Coumadin
+Who to contact: Dr. Lena Ortiz (prescribed Lipitor, Coumadin); Arjun Shah (Pharmacist).
+Options in the graph with no major conflicts: Zithromax (needs monitoring). Ask the clinician before switching.
+(Recorded as act-070d3b99; a clinician on the care team must review it.)

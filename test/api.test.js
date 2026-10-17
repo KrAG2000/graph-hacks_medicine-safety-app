@@ -84,36 +84,104 @@ test("protected routes need a valid Bearer token", { skip }, async () => {
   assert.equal((await get("/me", login.body.access_token)).body.user.name, "Priya Iyer");
 });
 
-test("invite flow: new caregiver has no patients until a care-team clinician invites them", { skip }, async () => {
+test("patient registration: own record, age required, then asks a doctor who approves", { skip }, async () => {
+  assert.equal((await post("/auth/register", { role: "patient", username: "ida", password: "a-long-password", name: "Ida" })).body.error.code, "invalid_age");
+  assert.equal((await post("/auth/register", { role: "doctor", username: "ida", password: "a-long-password", name: "Ida" })).body.error.code, "invalid_role");
+  const ida = new Client(base);
+  const u = await ida.register("ida", "a-long-password", "Ida Berg", { role: "patient", age: 70 });
+  assert.equal(u.kind, "Patient");
+  const { patients } = await ida.me();
+  assert.deepEqual(patients.map((p) => p.name), ["Ida Berg"]); // their own record only
+  await ida.openSession(u.id);
+  assert.deepEqual((await ida.patient()).care_team, []);
+
+  const { clinicians } = await ida.clinicians();
+  const okafor = clinicians.find((c) => c.name === "Dr. Samuel Okafor");
+  assert.equal(okafor.patients, 0);
+  await rejects(ida.requestAccess("cl-nope"), "not_found");
+  assert.equal((await ida.requestAccess(okafor.id, { message: "Diabetes follow-up" })).request.status, "pending");
+  await rejects(ida.requestAccess(okafor.id), "already_requested");
+
+  const doc = new Client(base);
+  await doc.login("okafor", "okafor-demo");
+  await rejects(doc.requestAccess(okafor.id), "forbidden"); // clinicians don't request
+  const { inbox } = await doc.requests();
+  assert.equal(inbox.length, 1);
+  assert.deepEqual([inbox[0].from_name, inbox[0].from_kind, inbox[0].from_age, inbox[0].kind], ["Ida Berg", "Patient", 70, "self"]);
+  await rejects(doc.decideRequest(inbox[0].id, "rejected", { note: "" }), "note_required");
+  const rao = new Client(base);
+  await rao.login("rao", "rao-demo");
+  await rejects(rao.decideRequest(inbox[0].id, "approved"), "not_found"); // not addressed to Dr. Rao
+  const ok = await doc.decideRequest(inbox[0].id, "approved", { note: "Welcome" });
+  assert.equal(ok.patient, "Ida Berg");
+  await rejects(doc.decideRequest(inbox[0].id, "approved"), "not_found"); // decided once
+  assert.deepEqual((await ida.patient()).care_team.map((c) => c.name), ["Dr. Samuel Okafor"]);
+  const mine = (await ida.requests()).mine;
+  assert.deepEqual([mine[0].status, mine[0].note, mine[0].patient], ["approved", "Welcome", "Ida Berg"]);
+  await rejects(ida.requestAccess(okafor.id), "already_on_team");
+  // the doctor now has her, and can record a diagnosis and prescribe
+  assert.ok((await doc.me()).patients.some((p) => p.name === "Ida Berg"));
+});
+
+test("caregiver request: doctor picks one of their own patients to link", { skip }, async () => {
   const kai = new Client(base);
   await kai.register("kai", "looks-after-ravi-26", "Kai Wong");
   assert.deepEqual((await kai.me()).patients, []);
   await rejects(kai.openSession("pt-ravi"), "forbidden");
-  await rejects(kai.createInvite(), "no_session");
+  await rejects(kai.requestAccess("cl-rao", {}), "patient_name_required");
+  const { request } = await kai.requestAccess("cl-rao", { patient_name: "Ravi Iyer", relation: "neighbour" });
 
+  const rao = new Client(base);
+  await rao.login("rao", "rao-demo");
+  const { inbox, patients } = await rao.requests();
+  const q = inbox.find((x) => x.id === request.id);
+  assert.equal(q.patient_name, "Ravi Iyer");
+  assert.ok(patients.some((p) => p.id === "pt-ravi"));
+  await rejects(rao.decideRequest(q.id, "approved"), "pick_patient");
+  await rejects(rao.decideRequest(q.id, "approved", { patient_id: "pt-lena-unknown" }), "pick_patient");
   const ortiz = new Client(base);
   await ortiz.login("ortiz", "ortiz-demo");
-  const [first] = (await ortiz.me()).patients;
-  assert.equal(first.id, "pt-kamala"); // Dr. Ortiz is not on Ravi's team
-  await rejects(ortiz.openSession("pt-ravi"), "forbidden");
+  await rejects(ortiz.decideRequest(q.id, "approved", { patient_id: "pt-kamala" }), "not_found"); // not her request
+  assert.equal((await rao.decideRequest(q.id, "approved", { patient_id: "pt-ravi" })).patient, "Ravi Iyer");
+  await kai.openSession("pt-ravi");
+  assert.match((await kai.ask("Can he take Advil?")).answer, /Ravi Iyer \+ Advil.*CAUTION/);
+
+  // a declined request explains why and grants nothing
+  const zed = new Client(base);
+  await zed.register("zed", "another-long-pass", "Zed");
+  const r2 = (await zed.requestAccess("cl-rao", { patient_name: "Kamala Iyer" })).request;
+  await rao.decideRequest(r2.id, "rejected", { note: "Kamala's family hasn't mentioned you." });
+  assert.equal((await zed.requests()).mine[0].status, "rejected");
+  assert.deepEqual((await zed.me()).patients, []);
+});
+
+test("record editing: OTC by family, prescriptions and conditions by clinicians, who-did-it recorded", { skip }, async () => {
+  const sam = new Client(base);
+  await sam.login("sam", "sam-demo");
+  await sam.openSession("pt-ravi");
+  await rejects(sam.addMedication("Unobtainium"), "unknown_drug");
+  const added = await sam.addMedication("Mucinex", "600 mg twice daily");
+  assert.deepEqual([added.drug, added.prescribed], ["Mucinex", false]);
+  await rejects(sam.addMedication("Mucinex"), "already_taking");
+  await rejects(sam.addCondition("cond-asthma"), "forbidden");
+  await rejects(sam.stopMedication("Norvasc"), "cannot_stop"); // prescribed: clinicians only
+  assert.equal((await sam.addAllergy("cls-macrolide", "rash")).name, "Macrolide antibiotics");
+  const meds = (await sam.patient()).medications;
+  const muc = meds.find((m) => m.brand === "Mucinex");
+  assert.deepEqual([muc.otc, muc.added_by, muc.prescriber], [true, "Sam Iyer", null]);
+  assert.match((await sam.check("Zithromax")).findings.map((f) => f.type).join(), /allergy/);
+  assert.equal((await sam.stopMedication("Mucinex")).drug, "Mucinex");
 
   const rao = new Client(base);
   await rao.login("rao", "rao-demo");
   await rao.openSession("pt-ravi");
-  const inv = await rao.createInvite();
-  assert.match(inv.code, /^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
-
-  const priya = new Client(base);
-  await priya.login("priya", "priya-demo");
-  await priya.openSession("pt-kamala");
-  await rejects(priya.createInvite(), "forbidden"); // caregivers can't invite
-
-  await rejects(kai.acceptInvite("AAAA-BBBB"), "invalid_invite");
-  assert.equal((await kai.acceptInvite(inv.code.toLowerCase())).patient.name, "Ravi Iyer");
-  await rejects(kai.acceptInvite(inv.code), "invalid_invite"); // one use
-  const s = await kai.openSession("pt-ravi");
-  assert.equal(s.patient.name, "Ravi Iyer");
-  assert.match((await kai.ask("Can he take Advil?")).answer, /Ravi Iyer \+ Advil.*CAUTION/);
+  await rao.addCondition("cond-ulcer");
+  const rx = await rao.addMedication("Zithromax", "250 mg daily");
+  assert.equal(rx.prescribed, true);
+  const p = await rao.patient();
+  assert.ok(p.conditions.includes("Stomach ulcer"));
+  assert.equal(p.medications.find((m) => m.brand === "Zithromax").prescriber, "Dr. Meera Rao");
+  assert.equal((await rao.check("Advil")).level, "stop"); // NSAID + the ulcer just recorded
 });
 
 test("session scope: the access token is pinned to one patient; access is re-checked every request", { skip }, async () => {

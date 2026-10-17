@@ -159,7 +159,7 @@ export function offline() {
       ? v
           .map((r) =>
             Object.entries(r)
-              .filter(([, x]) => x !== null && x !== "" && x !== false)
+              .filter(([k, x]) => x !== null && x !== "" && x !== false && !k.endsWith("_id"))
               .map(([k, x]) => `${k}: ${x}`)
               .join(" | "),
           )

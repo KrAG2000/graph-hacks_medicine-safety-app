@@ -96,8 +96,8 @@ export class Client {
     return user;
   }
 
-  async register(username, password, name) {
-    return this.#signedIn(await this.#raw("POST", "/auth/register", { username, password, name }));
+  async register(username, password, name, { role = "caregiver", age } = {}) {
+    return this.#signedIn(await this.#raw("POST", "/auth/register", { username, password, name, role, age }));
   }
 
   async login(username, password) {
@@ -137,8 +137,17 @@ export class Client {
   }
 
   me = () => this.request("GET", "/me");
-  acceptInvite = (code) => this.request("POST", "/invites/accept", { code });
-  createInvite = () => this.request("POST", "/invites");
+  clinicians = () => this.request("GET", "/clinicians");
+  requestAccess = (clinician_id, { patient_name, relation, message } = {}) =>
+    this.request("POST", "/requests", { clinician_id, patient_name, relation, message });
+  requests = () => this.request("GET", "/requests");
+  decideRequest = (request_id, decision, { patient_id, note } = {}) =>
+    this.request("POST", "/requests/decide", { request_id, decision, patient_id, note });
+  catalog = () => this.request("GET", "/catalog");
+  addMedication = (drug, dose) => this.request("POST", "/patient/medications", { drug, dose });
+  stopMedication = (drug) => this.request("POST", "/patient/medications/stop", { drug });
+  addCondition = (condition_id) => this.request("POST", "/patient/conditions", { condition_id });
+  addAllergy = (allergen_id, reaction) => this.request("POST", "/patient/allergies", { allergen_id, reaction });
   patient = () => this.request("GET", "/patient");
   ask = (question) => this.request("POST", "/ask", { question });
   check = (drug) => this.request("POST", "/check", { drug });

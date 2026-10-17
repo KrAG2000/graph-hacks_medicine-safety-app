@@ -22,7 +22,7 @@ export const QUERIES = {
     LIMIT 1`,
   current_meds: `MATCH (p:Patient {id:$patient})-[:HAS_RX]->(rx:Rx {active:true})-[:OF]->(d:Drug)
     OPTIONAL MATCH (doc:Clinician)-[:PRESCRIBED]->(rx)
-    RETURN d.brand AS brand, d.name AS drug, rx.dose AS dose, rx.otc AS otc, doc.name AS prescriber`,
+    RETURN d.id AS drug_id, d.brand AS brand, d.name AS drug, rx.dose AS dose, rx.otc AS otc, doc.name AS prescriber, rx.added_by AS added_by`,
   care_team: `MATCH (c:Clinician)-[:CARES_FOR]->(:Patient {id:$patient})
     RETURN c.name AS name, c.role AS role`,
   interactions: `MATCH (:Patient {id:$patient})-[:HAS_RX]->(rx:Rx {active:true})-[:OF]->(cur:Drug)-[:CONTAINS]->(ci:Ingredient)

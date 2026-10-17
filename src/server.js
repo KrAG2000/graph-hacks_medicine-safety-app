@@ -3,9 +3,13 @@
  *
  * Public:   POST /auth/register {username,password,name}   POST /auth/login {username,password}
  *           POST /auth/refresh {refresh_token, session_id?} POST /auth/logout {refresh_token}
- * User:     GET /me    POST /sessions {patient_id}    POST /invites/accept {code}
+ * User:     GET /me   POST /sessions {patient_id}   GET /catalog   GET /clinicians
+ *           POST /requests {clinician_id, patient_name?, relation?, message?}   GET /requests (sent, or a clinician's inbox)
  * Session:  GET /patient   POST /ask {question}   POST /check {drug}   GET /history?drug=
- * Clinician (session): GET /pending   POST /reviews {action_id, decision, note}   POST /invites
+ *           POST /patient/medications {drug, dose}   POST /patient/medications/stop {drug}
+ *           POST /patient/allergies {allergen_id, reaction}   POST /patient/conditions {condition_id} (clinician)
+ * Clinician: POST /requests/decide {request_id, decision, patient_id?, note}
+ *            (session) GET /pending   POST /reviews {action_id, decision, note}
  * Web UI:   GET /  (static files from public/)
  *
  * Browser clients send `X-Client: web`. For them the refresh token is never put in a JSON body: it lives in an
@@ -18,13 +22,14 @@ import { pathToFileURL } from "node:url";
 import { connect, GRAPH_NAME } from "./db.js";
 import { createLLM } from "./llm.js";
 import {
-  login, register, getUser, getSession, patientsFor, openSession,
-  createInvite, acceptInvite, AuthError, LoginThrottle,
+  login, register, getUser, getSession, patientsFor, openSession, AuthError, LoginThrottle,
+  clinicians, requestAccess, myRequests, inbox, decideRequest,
 } from "./auth.js";
+import { catalog, addMedication, stopMedication, addCondition, addAllergy } from "./care.js";
 import { issueTokens, rotate, revoke, verifyAccess, accessToken, REFRESH_TTL } from "./tokens.js";
 import { TokenError } from "./jwt.js";
 import { history, pendingChecks, reviewAction } from "./memory.js";
-import { patientInfo, named } from "./tools.js";
+import { patientInfo } from "./tools.js";
 import { ask } from "./agents/assistant.js";
 import { checkMedication } from "./agents/checker.js";
 
@@ -170,22 +175,48 @@ export function createApp(graph, { llm = createLLM(), throttle = new LoginThrott
       // New access token pinned to this session/patient. The refresh token is unchanged.
       return [201, { session: view(session), access_token: accessToken(user, session) }];
     },
-    "POST /invites/accept": async (req) => {
-      const { user } = await authenticate(req);
-      const { code } = await body(req);
-      return [200, { patient: await acceptInvite(graph, user.id, code) }];
-    },
-    "POST /invites": async (req) => {
-      const { user, session } = await authenticate(req, { needSession: true, clinician: true });
-      return [201, await createInvite(graph, user.id, session.patient.id)];
-    },
-    "GET /drugs": async (req) => {
+    "GET /clinicians": async (req) => {
       await authenticate(req);
-      return [200, { drugs: await named(graph, "all_drugs", {}) }];
+      return [200, { clinicians: await clinicians(graph) }];
+    },
+    "POST /requests": async (req) => {
+      const { user } = await authenticate(req);
+      return [201, { request: await requestAccess(graph, user, await body(req)) }];
+    },
+    "GET /requests": async (req) => {
+      const { user } = await authenticate(req);
+      if (user.kind === "Clinician")
+        return [200, { inbox: await inbox(graph, user.id), patients: await patientsFor(graph, user.id) }];
+      return [200, { mine: await myRequests(graph, user.id) }];
+    },
+    "POST /requests/decide": async (req) => {
+      const { user } = await authenticate(req, { clinician: true });
+      const { request_id, ...decision } = await body(req);
+      return [200, await decideRequest(graph, user.id, request_id, decision)];
+    },
+    "GET /catalog": async (req) => {
+      await authenticate(req);
+      return [200, await catalog(graph)];
     },
     "GET /patient": async (req) => {
       const { session } = await authenticate(req, { needSession: true });
       return [200, { patient: session.patient, ...(await patientInfo(graph, session.patient.id, "all")) }];
+    },
+    "POST /patient/medications": async (req) => {
+      const { user, session } = await authenticate(req, { needSession: true });
+      return [201, await addMedication(graph, user, session.patient.id, await body(req))];
+    },
+    "POST /patient/medications/stop": async (req) => {
+      const { user, session } = await authenticate(req, { needSession: true });
+      return [200, await stopMedication(graph, user, session.patient.id, await body(req))];
+    },
+    "POST /patient/conditions": async (req) => {
+      const { user, session } = await authenticate(req, { needSession: true });
+      return [201, await addCondition(graph, user, session.patient.id, await body(req))];
+    },
+    "POST /patient/allergies": async (req) => {
+      const { user, session } = await authenticate(req, { needSession: true });
+      return [201, await addAllergy(graph, user, session.patient.id, await body(req))];
     },
     "POST /ask": async (req) => {
       const { session } = await authenticate(req, { needSession: true });

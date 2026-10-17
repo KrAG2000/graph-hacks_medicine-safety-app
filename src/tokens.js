@@ -52,7 +52,7 @@ async function refreshToken(graph, user, family = randomBytes(8).toString("hex")
   const token = sign({ typ: "refresh", sub: user.id, fam: family, jti }, secrets().refresh, { expiresIn: REFRESH_TTL });
   await run(
     graph,
-    `MATCH (u {id:$user}) WHERE u:Caregiver OR u:Clinician
+    `MATCH (u {id:$user}) WHERE u:Caregiver OR u:Clinician OR u:Patient
      CREATE (:RefreshToken {jti:$jti, family:$family, revoked:false, created:$ts, exp:$exp})-[:ISSUED_TO]->(u)`,
     { user: user.id, jti, family, ts: new Date().toISOString(), exp: Math.floor(Date.now() / 1000) + REFRESH_TTL },
   );

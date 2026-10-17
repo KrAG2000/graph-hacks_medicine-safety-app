@@ -2,6 +2,7 @@
 // ILLUSTRATIVE DATA ONLY. Simplified from public drug labeling for a demo. Not a clinical reference.
 
 // People. Logins are demo-only: password = <username>-demo, stored as scrypt hashes.
+// Dr. Menon and Dr. Okafor start with no patients: patients and caregivers can request them from the directory.
 CREATE (:Patient {id:'pt-kamala', name:'Kamala Iyer', age:78})
 CREATE (:Patient {id:'pt-ravi', name:'Ravi Iyer', age:81})
 CREATE (:Caregiver {id:'cg-priya', name:'Priya Iyer', relation:'daughter', username:'priya', pass_hash:'scrypt$c065af695c73702f29f1ebf539f68b52$7e9b111a08244009459ab61c6b79e458eca108a3d5311945073c2b98501dcd08'})
@@ -9,6 +10,31 @@ CREATE (:Caregiver {id:'cg-sam', name:'Sam Iyer', relation:'son', username:'sam'
 CREATE (:Clinician {id:'cl-rao', name:'Dr. Meera Rao', role:'Primary care physician', username:'rao', pass_hash:'scrypt$f7a6407898128693ae84b3f971c45609$8b7c03b8c78abaa93692f71ce640fa863333a5a8ec2186476b670023bc1fee95'})
 CREATE (:Clinician {id:'cl-ortiz', name:'Dr. Lena Ortiz', role:'Cardiologist', username:'ortiz', pass_hash:'scrypt$35317f11936b820790df54150f698ac5$83081534756ad73780463117add626106b5e87e69663ac3e125f20f05ebec67a'})
 CREATE (:Clinician {id:'cl-shah', name:'Arjun Shah', role:'Pharmacist', username:'shah', pass_hash:'scrypt$415fb9fc23e1600bdd8c90fbfcfbadb7$31c598b75b94467d9fddac247ffc9278fce0bcb7be65af10f6c2a69f7466cd0d'})
+CREATE (:Clinician {id:'cl-menon', name:'Dr. Kavita Menon', role:'Geriatrician', username:'menon', pass_hash:'scrypt$d1742bd86945186812d173b756fa1dfc$ea13ffa35cc8bf7b91105127e7e57cd9ca5400eef7598d1d123e3d6752db22ba'})
+CREATE (:Clinician {id:'cl-okafor', name:'Dr. Samuel Okafor', role:'Endocrinologist', username:'okafor', pass_hash:'scrypt$588a2b867478a2e1ecc35e1e5bd8fc4e$09aced444a4d6766dffa3a3f7f5369b5613c558c01e4c3ea3c361f503f45912e'})
+// Directory of other specialists, no patients yet (password = <username>-demo)
+CREATE (:Clinician {id:'cl-desai', name:'Dr. Priyanka Desai', role:'Nephrologist', username:'desai', pass_hash:'scrypt$87b57d6e79e6bc5a930d0ffe6ea88486$323c248a4cd3451de14fcb4174ab4ee81c1733790d187e4632e06b7b40e8d65d'})
+CREATE (:Clinician {id:'cl-feld', name:'Dr. Marcus Feld', role:'Neurologist', username:'feld', pass_hash:'scrypt$aaddfdae1136695ef64d43b2c9486502$911d0fe3aa5bbe5b5328da15c5a4b4ab083f785a5db6b442bad478afbbc74f08'})
+CREATE (:Clinician {id:'cl-rahman', name:'Dr. Aisha Rahman', role:'Psychiatrist', username:'rahman', pass_hash:'scrypt$ea93f01ea5b903fe96cacfb6442614a9$d2110ca24d37941343e7afb8eef953c2bbbf254da7c644a3e4f94ba241a013e4'})
+CREATE (:Clinician {id:'cl-herrera', name:'Dr. Tomás Herrera', role:'Pulmonologist', username:'herrera', pass_hash:'scrypt$a8b70f84906b9cfe17358af0f4364bcb$fe8b77678ef0fc64d3cc471eb1edb75d38b19f79d4d7bffdec7031420ad0cb37'})
+CREATE (:Clinician {id:'cl-tanaka', name:'Dr. Yuki Tanaka', role:'Gastroenterologist', username:'tanaka', pass_hash:'scrypt$dc7464410731d283c6e01639fe6844d6$dd2792a1b09df60b1c863a393467979d509f706612b9b03423395837c087e888'})
+CREATE (:Clinician {id:'cl-mwangi', name:'Dr. Grace Mwangi', role:'Rheumatologist', username:'mwangi', pass_hash:'scrypt$930b305c1a92c9c5fdf2aed2cb86fdb5$82e17b5379af6c585e636606c2f9ec2a9d537e93c4ef3a0432bcc859f56cfdf6'})
+CREATE (:Clinician {id:'cl-brandt', name:'Dr. Oliver Brandt', role:'Dermatologist', username:'brandt', pass_hash:'scrypt$c63adc1a34e1f95a22d50afab5a5bb17$30e48c6909f2cd6ed52fe22d911637cfe911479430600e5b931014ebdcc38f70'})
+CREATE (:Clinician {id:'cl-haddad', name:'Dr. Leila Haddad', role:'Oncologist', username:'haddad', pass_hash:'scrypt$ccd2c4473c3493de0aa707d5e73b3cf4$26b83a540e91542e40caec3954e08b377c28aeb2a084c6a5a1b6f9f7ef788913'})
+CREATE (:Clinician {id:'cl-pillai', name:'Dr. Rajesh Pillai', role:'Infectious disease specialist', username:'pillai', pass_hash:'scrypt$95ac5f4184bf8982a87c21be1f5dca28$b47763c6e66818fdfa39f3abf72b751fe2263108ebef8a0a5608d777434b1d96'})
+CREATE (:Clinician {id:'cl-lindqvist', name:'Dr. Sofia Lindqvist', role:'Obstetrician-gynecologist', username:'lindqvist', pass_hash:'scrypt$4f3c6d9f77303389c857d9f45caa0acd$039e063559869493311bed2549aa30e5aeb837e719a8a0ece592def43043df3a'})
+CREATE (:Clinician {id:'cl-cohen', name:'Dr. Daniel Cohen', role:'Pediatrician', username:'cohen', pass_hash:'scrypt$3a3738188b0f59dbdbffc4e7d99a3fe9$a015cf51c23b0578bc59baf30e44156283086704b6d0777f592023bcb913dc8b'})
+CREATE (:Clinician {id:'cl-idrissi', name:'Dr. Fatima Idrissi', role:'Orthopedic surgeon', username:'idrissi', pass_hash:'scrypt$d3157f9134ecb4a0559217ba69ea04d4$4fded5760458181c4ff1594c109ebb88d8fd04bed23cdd015a76bf64d8d15fc5'})
+CREATE (:Clinician {id:'cl-asante', name:'Dr. Kwame Asante', role:'Urologist', username:'asante', pass_hash:'scrypt$eea5d71c65c451ccd4b09aacfb45953b$e08b74b3b8f864266ca7c5838deccac2356f339a66d1220ce3e5e36b4f1b2ffc'})
+CREATE (:Clinician {id:'cl-mlwong', name:'Dr. Mei Lin Wong', role:'Ophthalmologist', username:'mlwong', pass_hash:'scrypt$604dbb90a9eb385750dd92bd3a81dd08$597434698a90f86e51a73afe5096a3fd6348195f7f5e3bd666d77538f579cb02'})
+CREATE (:Clinician {id:'cl-nolan', name:'Dr. Patrick Nolan', role:'ENT specialist', username:'nolan', pass_hash:'scrypt$2a073d1673e81ad42c31862bfba8d5eb$f5f68b907ef980e41388e0aaa25aa593ceac949cd54ea13cf5e4f5ed289a6e0a'})
+CREATE (:Clinician {id:'cl-ribeiro', name:'Dr. Ana Ribeiro', role:'Hematologist', username:'ribeiro', pass_hash:'scrypt$c7c9b9dab452a8d7e673d0b8f34905d9$f6932bfdff8e3a4fac508405eabe0ef942c6e3b51629792425441af502611186'})
+CREATE (:Clinician {id:'cl-karimi', name:'Dr. Hassan Karimi', role:'Allergist and immunologist', username:'karimi', pass_hash:'scrypt$20300284aaad8293494435396d803787$2dedcdc596cab3b06623074d8022b3104b89890077fca3aa1623ac0f226622ea'})
+CREATE (:Clinician {id:'cl-carter', name:'Dr. Emily Carter', role:'Family medicine physician', username:'carter', pass_hash:'scrypt$0c3acd8ca632981c544948da494c8094$431c32956c62eabf2526342da62c5689c933c2fd0f7dc8ca30bd1dcecacc96d3'})
+CREATE (:Clinician {id:'cl-sethi', name:'Dr. Vikram Sethi', role:'Internal medicine physician', username:'sethi', pass_hash:'scrypt$1ad3ae122fbde1b1a2c9757a65e67abd$9f1c37511e5fa91efe7c7d87079b3563fa8df359ed7c1917bbd74d40cdb1b007'})
+CREATE (:Clinician {id:'cl-martin', name:'Dr. Chloe Martin', role:'Emergency medicine physician', username:'martin', pass_hash:'scrypt$4d25e63456031fa78d5b85a0d2a92fa8$20c1c7c2953e2ccde234c8353f4766019d2e966559d6e983348bbf4d5ed82ba0'})
+CREATE (:Clinician {id:'cl-novak', name:'Dr. Ines Novak', role:'Pain medicine specialist', username:'novak', pass_hash:'scrypt$9fd8499bd9461e47b3b389439bcbab48$02d03ed068cc34f27a96b75f1da435c17574b9fa79071b775a014f5d990ab20f'})
+CREATE (:Clinician {id:'cl-petrova', name:'Nadia Petrova', role:'Clinical pharmacist', username:'petrova', pass_hash:'scrypt$8092174a573f9db12a380a45beadf55a$601ab89677cf2bc794c09a94bff9f92bd912946b4beac9bec6bf77b7fc6ab790'})
 
 // Conditions, age groups, indications
 CREATE (:Condition {id:'cond-afib', name:'Atrial fibrillation'})
@@ -16,6 +42,10 @@ CREATE (:Condition {id:'cond-t2d', name:'Type 2 diabetes'})
 CREATE (:Condition {id:'cond-htn', name:'High blood pressure'})
 CREATE (:Condition {id:'cond-ckd', name:'Chronic kidney disease'})
 CREATE (:Condition {id:'cond-oa', name:'Osteoarthritis'})
+CREATE (:Condition {id:'cond-ulcer', name:'Stomach ulcer'})
+CREATE (:Condition {id:'cond-liver', name:'Liver disease'})
+CREATE (:Condition {id:'cond-hf', name:'Heart failure'})
+CREATE (:Condition {id:'cond-asthma', name:'Asthma'})
 CREATE (:AgeGroup {id:'ag-65', name:'Older adults (65+)', min_age:65})
 CREATE (:Indication {id:'ind-pain', name:'Pain or fever'})
 CREATE (:Indication {id:'ind-infection', name:'Bacterial infection'})
@@ -119,6 +149,10 @@ MATCH (a:Ingredient {id:'ing-azithromycin'}), (b:DrugClass {id:'cls-anticoag'}) 
 
 // Condition and age cautions
 MATCH (a:DrugClass {id:'cls-nsaid'}), (c:Condition {id:'cond-ckd'}) CREATE (a)-[:CONTRAINDICATED_IN {severity:'major', reason:'NSAIDs can reduce blood flow to the kidneys and worsen kidney disease.'}]->(c)
+MATCH (a:DrugClass {id:'cls-nsaid'}), (c:Condition {id:'cond-ulcer'}) CREATE (a)-[:CONTRAINDICATED_IN {severity:'major', reason:'NSAIDs can cause stomach bleeding and make ulcers worse.'}]->(c)
+MATCH (a:DrugClass {id:'cls-nsaid'}), (c:Condition {id:'cond-hf'}) CREATE (a)-[:CONTRAINDICATED_IN {severity:'moderate', reason:'NSAIDs can make the body hold on to salt and water, which can worsen heart failure.'}]->(c)
+MATCH (a:DrugClass {id:'cls-nsaid'}), (c:Condition {id:'cond-asthma'}) CREATE (a)-[:CONTRAINDICATED_IN {severity:'moderate', reason:'In some people with asthma, NSAIDs can trigger breathing problems.'}]->(c)
+MATCH (a:Ingredient {id:'ing-acetaminophen'}), (c:Condition {id:'cond-liver'}) CREATE (a)-[:CONTRAINDICATED_IN {severity:'moderate', reason:'With liver disease the safe daily amount of acetaminophen is lower; ask for a personal limit.'}]->(c)
 MATCH (a:DrugClass {id:'cls-antihist1'}), (g:AgeGroup {id:'ag-65'}) CREATE (a)-[:CAUTION_IN {severity:'moderate', reason:'Can cause confusion, drowsiness, constipation and falls in older adults (AGS Beers Criteria).'}]->(g)
 
 // Kamala: conditions, allergy, medicines

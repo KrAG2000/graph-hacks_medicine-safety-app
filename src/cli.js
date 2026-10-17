@@ -1,10 +1,12 @@
 /**
  * Interactive CLI: a client of the API (`npm start` runs it). Tokens are saved in
  * ~/.config/med-safety-graph/credentials.json (mode 600), so you stay logged in until the refresh token ends.
- * Account:   /register, /login, /logout, /whoami, /join <invite-code>
+ * Account:   /register, /login, /logout, /whoami
+ * Access:    /doctors, /request <n>, /requests   (ask a doctor for access; they approve)
  * Patient:   /patients, /switch [n]  (every question is about the chosen patient)
- * Ask:       free text, /meds, /check <drug>, /history [drug]
- * Clinician: /pending, /approve <act-id> [-- note], /reject <act-id> -- <reason>, /invite
+ * Ask:       free text, /meds, /check <drug>, /history [drug], /add <drug> [-- dose], /stop <drug>
+ * Clinician: /requests, /accept <req-id> [patient n] [-- note], /decline <req-id> -- <reason>,
+ *            /pending, /approve <act-id> [-- note], /reject <act-id> -- <reason>
  */
 import readline from "node:readline";
 import { stdin as input, stdout as output } from "node:process";
@@ -27,6 +29,8 @@ async function prompt(q, { secret = false } = {}) {
 }
 const print = (v) => console.log(typeof v === "string" ? v : JSON.stringify(v, null, 2));
 const user = () => client.creds?.user;
+let doctors = [];
+let lastPatients = [];
 const session = () => client.creds?.session;
 
 async function doLogin() {
@@ -39,14 +43,19 @@ async function doLogin() {
 }
 
 async function doRegister() {
-  console.log("New caregiver account. (Clinician accounts are created by an administrator.)");
+  console.log("New account. (Clinician accounts are created by an administrator.)");
+  const who = await prompt("Are you the patient, or looking after someone? [patient/caregiver]: ");
+  if (who === null) return;
+  const role = /^p/i.test(who) ? "patient" : "caregiver";
+  const age = role === "patient" ? await prompt("Your age: ") : undefined;
+  if (age === null) return;
   const username = await prompt("Choose a username: ");
   const name = username === null ? null : await prompt("Your full name: ");
   const password = name === null ? null : await prompt("Password (10+ characters): ", { secret: true });
   const again = password === null ? null : await prompt("Repeat password: ", { secret: true });
   if (again === null) return;
   if (password !== again) return console.log("Passwords don't match.");
-  const u = await client.register(username, password, name);
+  const u = await client.register(username, password, name, { role, age });
   console.log(`Account created. Welcome, ${u.name}.`);
   await choosePatient();
 }
@@ -55,7 +64,9 @@ async function choosePatient(pick = "") {
   const { patients } = await client.me();
   if (!patients.length) {
     console.log(
-      "You are not on any patient's care team yet. Ask a clinician on the care team for an invite code, then type /join <code>.",
+      user().kind === "Clinician"
+        ? "You have no patients yet. Patients and caregivers can request you; see /requests."
+        : "You are not on any care team yet. See /doctors, then /request <n> to ask a doctor. You'll get access when they approve.",
     );
     return;
   }
@@ -73,8 +84,8 @@ async function choosePatient(pick = "") {
   console.log(`Session ${s.id}: everything you ask now is about ${s.patient.name}.`);
   console.log(`Try: "What is ${first} taking?" | "Can ${first} take Advil?" | "Is NyQuil okay?" | "What did we decide about Biaxin?"`);
   console.log(
-    "Commands: /meds, /check <drug>, /history [drug], /patients, /switch [n], /join <code>, /whoami, /logout, quit" +
-      (user().kind === "Clinician" ? "\nClinician: /pending, /approve <act-id> [-- note], /reject <act-id> -- <reason>, /invite" : ""),
+    "Commands: /meds, /check <drug>, /add <drug> [-- dose], /stop <drug>, /history [drug], /patients, /switch [n], /doctors, /requests, /whoami, /logout, quit" +
+      (user().kind === "Clinician" ? "\nClinician: /requests, /accept <req-id> [patient n] [-- note], /decline <req-id> -- <reason>, /pending, /approve <act-id> [-- note], /reject <act-id> -- <reason>" : ""),
   );
 }
 
@@ -128,16 +139,49 @@ while (true) {
       print(`${me.user.name} (${me.user.role})` + (me.session ? `, session ${me.session.id} about ${me.session.patient.name}` : ", no patient selected"));
     } else if (cmd === "/patients") {
       const { patients } = await client.me();
-      print(patients.map((p, i) => `${i + 1}. ${p.name} (${p.age})`).join("\n") || "No patients yet. Use /join <code>.");
+      print(patients.map((p, i) => `${i + 1}. ${p.name} (${p.age})`).join("\n") || "No patients yet. See /doctors and /request.");
     } else if (cmd === "/switch") await choosePatient(rest);
-    else if (cmd === "/join") {
-      const { patient } = await client.acceptInvite(rest);
-      console.log(`You joined ${patient.name}'s care team.`);
-      await choosePatient();
-    } else if (!session()) console.log("Pick a patient first: /switch (or /join <code> if you have none).");
-    else if (cmd === "/invite") {
-      const inv = await client.createInvite();
-      print(`Invite code for ${inv.patient}: ${inv.code} (one use, expires ${inv.expires.slice(0, 10)}). Give it to the caregiver.`);
+    else if (cmd === "/doctors") {
+      doctors = (await client.clinicians()).clinicians;
+      print(doctors.map((c, i) => `${i + 1}. ${c.name} (${c.role}), ${c.patients} patient(s)`).join("\n"));
+    } else if (cmd === "/request") {
+      if (!doctors.length) doctors = (await client.clinicians()).clinicians;
+      const doc = doctors[Number(rest) - 1];
+      if (!doc) print("Usage: /request <n> (see /doctors)");
+      else {
+        let patient_name, relation;
+        if (user().kind === "Caregiver") {
+          patient_name = await prompt("Full name of the person you look after: ");
+          relation = await prompt("Your relationship to them (e.g. daughter): ");
+        }
+        const message = await prompt(`Message for ${doc.name} (optional): `);
+        const { request } = await client.requestAccess(doc.id, { patient_name, relation, message });
+        print(`Request ${request.id} sent to ${request.clinician}. You'll get access when they approve (see /requests).`);
+      }
+    } else if (cmd === "/requests") {
+      const r = await client.requests();
+      if (r.inbox) {
+        lastPatients = r.patients;
+        print(
+          (r.inbox.map((q) => `${q.id}  ${q.from_name} (${q.from_kind}${q.from_age ? `, ${q.from_age}` : ""})` +
+            (q.kind === "self" ? " asks you to join their care team" : ` looks after "${q.patient_name}"${q.relation ? ` (${q.relation})` : ""}`) +
+            (q.message ? `\n      "${q.message}"` : "")).join("\n") || "No pending requests.") +
+            (r.inbox.some((q) => q.kind === "caregiver") ? `\nYour patients: ${r.patients.map((p, i) => `${i + 1}. ${p.name}`).join("  ")}` : ""),
+        );
+      } else
+        print(r.mine.map((q) => `${q.id}  to ${q.clinician}: ${q.status}${q.patient ? ` (${q.patient})` : ""}${q.note ? ` · "${q.note}"` : ""}`).join("\n") || "No requests sent.");
+    } else if (cmd === "/accept" || cmd === "/decline") {
+      const [head, note = ""] = rest.split(/\s+--\s+/);
+      const [id, n] = head.trim().split(/\s+/);
+      const r = await client.decideRequest(id, cmd === "/accept" ? "approved" : "rejected", { patient_id: lastPatients[Number(n) - 1]?.id, note });
+      print(r.status === "approved" ? `Approved: ${r.patient}.` : "Declined.");
+    } else if (!session()) console.log("Pick a patient first: /switch (or /doctors and /request if you have none).");
+    else if (cmd === "/add") {
+      const [drug, dose = ""] = rest.split(/\s+--\s+/);
+      const r = await client.addMedication(drug.trim(), dose.trim());
+      print(`Added ${r.drug} (${r.dose})${r.prescribed ? " as a prescription" : " as over-the-counter"}. Tip: /check ${r.drug}`);
+    } else if (cmd === "/stop") {
+      print(`Stopped ${(await client.stopMedication(rest)).drug}.`);
     } else if (cmd === "/meds") {
       const p = await client.patient();
       print(p.medications.map((m) => `${m.brand} (${m.drug}) ${m.dose}` + (m.prescriber ? `, prescribed by ${m.prescriber}` : ", over the counter")).join("\n"));

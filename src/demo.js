@@ -1,6 +1,6 @@
 /**
  * Scripted demo (good for a video). Starts the API in-process and drives it with API clients, like the CLI does:
- * registration + invite, JWT login, patient-scoped sessions, checker handoff, pharmacist decision,
+ * patient and caregiver registration, access requests approved by doctors, JWT login, patient-scoped sessions, checker handoff, pharmacist decision,
  * refresh-token rotation and reuse detection, and memory across sessions.
  */
 import { connect } from "./db.js";
@@ -28,6 +28,16 @@ const tryIt = async (label, fn) => {
     console.log(`${label} -> refused (${e.status} ${e.code})`);
   }
 };
+const registerOrLogin = async (c, username, password, name, opts) => {
+  try {
+    await c.register(username, password, name, opts);
+    console.log(`registered ${username} (${opts.role})`);
+  } catch (e) {
+    if (e.code !== "username_taken") throw e;
+    await c.login(username, password);
+    console.log(`${username} already registered; logged in`);
+  }
+};
 const say = async (c, q) => {
   console.log(`\n${c.creds.user.name} → ${c.creds.session.patient.name}> ${q}`);
   const { answer, trace } = await c.ask(q);
@@ -37,27 +47,42 @@ const say = async (c, q) => {
 
 console.log(`API ${base}, LLM provider: ${llm.name}`);
 
-console.log("\n=== 1. Registration: Neha, a family friend who helps Kamala, signs up ===");
-const neha = client();
-try {
-  await neha.register("neha", "kamala-helper-26", "Neha Kapoor");
-  console.log("registered neha (Caregiver)");
-} catch (e) {
-  if (e.code !== "username_taken") throw e;
-  await neha.login("neha", "kamala-helper-26");
-  console.log("neha already registered; logged in");
-}
-console.log(`neha can see: ${JSON.stringify((await neha.me()).patients.map((p) => p.name))}`);
-await tryIt("neha opens Kamala's record before being invited", () => neha.openSession("pt-kamala"));
+console.log("\n=== 1. A new patient registers and asks a doctor to join her care team ===");
+const lena = client();
+await registerOrLogin(lena, "lena", "knees-and-tea-26", "Lena Fischer", { role: "patient", age: 72 });
+console.log(`lena's own record: ${JSON.stringify((await lena.me()).patients.map((p) => p.name))}`);
+const { clinicians } = await lena.clinicians();
+console.log(`doctor directory: ${clinicians.length} clinicians, e.g. ${clinicians.slice(0, 6).map((c) => `${c.name} (${c.role}, ${c.patients} patients)`).join("; ")} …`);
+const menonId = clinicians.find((c) => c.name.includes("Menon")).id;
+await tryIt("lena asks Dr. Menon", () => lena.requestAccess(menonId, { message: "My knees hurt and I take a lot of tablets." }));
+await tryIt("lena asks Dr. Menon again while pending", () => lena.requestAccess(menonId));
 
-console.log("\n=== 2. Dr. Rao (on Kamala's care team) creates a one-time invite ===");
+const menon = client();
+await menon.login("menon", "menon-demo");
+const { inbox: menonInbox } = await menon.requests();
+console.log(`Dr. Menon's inbox: ${menonInbox.map((q) => `${q.from_name} (${q.from_kind}, ${q.from_age}): ${q.kind}`).join("; ")}`);
+const approved = await menon.decideRequest(menonInbox[0].id, "approved", { note: "Welcome, see you Tuesday." });
+console.log(`approved -> Dr. Menon now cares for ${approved.patient}`);
+await menon.openSession(approved.patient_id);
+await menon.addCondition("cond-ulcer");
+await menon.addMedication("Tylenol", "500 mg up to 3 times a day");
+console.log("Dr. Menon records a stomach ulcer and prescribes Tylenol");
+await lena.openSession(lena.creds.user.id);
+await say(lena, "Can I take Advil for my knees?");
+
+console.log("\n=== 2. A caregiver asks Dr. Rao for access to someone she looks after ===");
+const neha = client();
+await registerOrLogin(neha, "neha", "kamala-helper-26", "Neha Kapoor", { role: "caregiver" });
+console.log(`neha can see: ${JSON.stringify((await neha.me()).patients.map((p) => p.name))}`);
+await tryIt("neha opens Kamala's record before approval", () => neha.openSession("pt-kamala"));
+const raoId = clinicians.find((c) => c.name.includes("Rao")).id;
+await neha.requestAccess(raoId, { patient_name: "Kamala Iyer", relation: "neighbour", message: "I help Kamala with her medicines on weekdays." });
 const rao = client();
 await rao.login("rao", "rao-demo");
-await rao.openSession("pt-kamala");
-const inv = await rao.createInvite();
-console.log(`invite code ${inv.code} for ${inv.patient}, expires ${inv.expires.slice(0, 10)}`);
-await tryIt("neha redeems the code", () => neha.acceptInvite(inv.code));
-await tryIt("neha redeems the same code again", () => neha.acceptInvite(inv.code));
+const { inbox: raoInbox, patients: raoPatients } = await rao.requests();
+const req = raoInbox.find((q) => q.from_name === "Neha Kapoor");
+console.log(`Dr. Rao sees: ${req.from_name} looks after "${req.patient_name}" (${req.relation}); Dr. Rao's patients: ${raoPatients.map((p) => p.name).join(", ")}`);
+await rao.decideRequest(req.id, "approved", { patient_id: "pt-kamala", note: "Thanks for helping her." });
 await neha.openSession("pt-kamala");
 await say(neha, "What is she taking?");
 

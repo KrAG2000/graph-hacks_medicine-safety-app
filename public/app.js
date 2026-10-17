@@ -11,17 +11,22 @@ const state = {
   session: null,
   patients: [],
   patient: null, // {patient, medications, conditions, allergies, care_team}
-  drugs: [],
+  catalog: null, // {drugs, conditions, allergens}
   tab: "check",
+  view: "main", // "main" | "requests"
+  requests: null, // {mine} for patients/caregivers, {inbox, patients} for clinicians
+  clinicians: null,
+  reqDoctor: null,
+  editing: null, // "med" | "allergy" | "condition"
+  pendingAdd: null, // {drug, dose}: checked first, added only when the user confirms after seeing the result
+  regRole: "caregiver",
   check: null,
   checking: false,
   chat: [],
   asking: false,
   history: null,
   pending: null,
-  invite: null,
   menu: false,
-  joining: false,
   authTab: "login",
   authError: "",
   busy: false,
@@ -109,7 +114,9 @@ const day = (ts) => (ts ? new Date(ts).toLocaleDateString(undefined, { day: "num
 
 function toast(text, kind = "") {
   const t = h("div", { class: `toast ${kind}`, text });
-  document.getElementById("toasts").append(t);
+  const box = document.getElementById("toasts");
+  box.append(t);
+  while (box.children.length > 3) box.firstChild.remove();
   setTimeout(() => t.remove(), 4200);
 }
 
@@ -209,7 +216,8 @@ async function api(method, path, body) {
 
 function signedOut(message) {
   clearTimeout(refreshTimer);
-  Object.assign(state, { token: null, user: null, session: null, patients: [], patient: null, check: null, chat: [], history: null, pending: null, invite: null, menu: false, joining: false });
+  document.getElementById("toasts").replaceChildren(); // don't show one account's messages to the next
+  Object.assign(state, { token: null, user: null, session: null, patients: [], patient: null, check: null, chat: [], history: null, pending: null, menu: false, view: "main", requests: null, clinicians: null, reqDoctor: null, editing: null, authTab: "login", authError: "" });
   store.set("sid", "");
   if (message) toast(message);
   render();
@@ -226,6 +234,7 @@ async function loadMe() {
 
 async function afterSignIn() {
   const me = await loadMe();
+  await Promise.all([loadRequests(), me.patients.length || me.user.kind === "Clinician" ? null : loadClinicians()]).catch(() => {});
   if (me.session) await loadPatient();
   else if (me.patients.length === 1) await openSession(me.patients[0].id);
   render();
@@ -235,18 +244,20 @@ async function openSession(patientId) {
   const r = await api("POST", "/sessions", { patient_id: patientId });
   state.token = r.access_token; // pinned to this patient
   setSession(r.session);
-  Object.assign(state, { check: null, chat: [], history: null, pending: null, invite: null, menu: false, joining: false, tab: "check" });
+  Object.assign(state, { check: null, chat: [], history: null, pending: null, menu: false, view: "main", editing: null, pendingAdd: null, tab: "check" });
   await loadPatient();
   render();
 }
 
 async function loadPatient() {
   const clinician = state.user?.kind === "Clinician";
-  const [p, d] = await Promise.all([api("GET", "/patient"), state.drugs.length ? null : api("GET", "/drugs")]);
+  const [p, c] = await Promise.all([api("GET", "/patient"), state.catalog ? null : api("GET", "/catalog")]);
   state.patient = p;
-  if (d) state.drugs = d.drugs;
+  if (c) state.catalog = c;
   await Promise.all([loadHistory(), clinician ? loadPending() : null]);
 }
+const loadRequests = async () => (state.requests = await api("GET", "/requests"));
+const loadClinicians = async () => (state.clinicians = (await api("GET", "/clinicians")).clinicians);
 const loadHistory = async () => (state.history = (await api("GET", "/history")).history);
 const loadPending = async () => (state.pending = (await api("GET", "/pending")).pending);
 
@@ -319,23 +330,58 @@ async function decide(id, decision, note) {
   render();
 }
 
-async function makeInvite() {
+async function showRequests() {
+  state.view = "requests";
+  state.menu = false;
+  render();
   try {
-    state.invite = await api("POST", "/invites");
+    await Promise.all([loadRequests(), loadMe(), state.user.kind === "Clinician" ? null : loadClinicians()]);
   } catch (e) {
     toast(e.message, "error");
   }
   render();
 }
 
-async function joinWithCode(code) {
+async function sendRequest(form) {
+  const f = new FormData(form);
   try {
-    const { patient } = await api("POST", "/invites/accept", { code });
-    toast(`You joined ${patient.name}'s care team.`);
-    await loadMe();
-    await openSession(patient.id);
+    const { request } = await api("POST", "/requests", {
+      clinician_id: state.reqDoctor,
+      patient_name: f.get("patient_name") || undefined,
+      relation: f.get("relation") || undefined,
+      message: f.get("message") || "",
+    });
+    toast(`Request sent to ${request.clinician}. You'll get access when they approve.`);
+    state.reqDoctor = null;
+    await loadRequests();
   } catch (e) {
     toast(e.message, "error");
+  }
+  render();
+}
+
+async function decideAccess(req, decision, patientId, note) {
+  try {
+    const r = await api("POST", "/requests/decide", { request_id: req.id, decision, patient_id: patientId, note });
+    toast(r.status !== "approved" ? "Request declined." : req.kind === "self" ? `${r.patient} is now your patient.` : `Approved. ${req.from_name} now has access to ${r.patient}.`);
+    await Promise.all([loadRequests(), loadMe()]);
+  } catch (e) {
+    toast(e.message, "error");
+  }
+  render();
+}
+
+async function editRecord(path, payload, done) {
+  try {
+    const r = await api("POST", path, payload);
+    state.editing = null;
+    state.patient = await api("GET", "/patient");
+    toast(done(r));
+    return r;
+  } catch (e) {
+    toast(e.message, "error");
+    render();
+    return null;
   }
 }
 
@@ -354,10 +400,9 @@ function authView() {
     document.getElementById("password").value = `${u}-demo`;
   };
   const demos = [
-    ["priya", "Priya Iyer", "Caregiver · Kamala, Ravi"],
-    ["sam", "Sam Iyer", "Caregiver · Ravi"],
-    ["shah", "Arjun Shah", "Pharmacist"],
-    ["rao", "Dr. Meera Rao", "Primary care"],
+    ["Family", [["priya", "Priya Iyer", "Caregiver · Kamala, Ravi"], ["sam", "Sam Iyer", "Caregiver · Ravi"]]],
+    ["Care team", [["rao", "Dr. Meera Rao", "Primary care · 2 patients"], ["ortiz", "Dr. Lena Ortiz", "Cardiologist · Kamala"], ["shah", "Arjun Shah", "Pharmacist · 2 patients"]]],
+    ["Doctors with no patients yet (22 more specialists in the directory)", [["menon", "Dr. Kavita Menon", "Geriatrician"], ["okafor", "Dr. Samuel Okafor", "Endocrinologist"]]],
   ];
   const onSubmit = (e) => {
     e.preventDefault();
@@ -367,7 +412,7 @@ function authView() {
       state.authError = "Passwords don't match.";
       return render();
     }
-    signIn("/auth/register", { username: f.get("username"), name: f.get("name"), password: f.get("password") });
+    signIn("/auth/register", { role: state.regRole, age: f.get("age") || undefined, username: f.get("username"), name: f.get("name"), password: f.get("password") });
   };
   return h("div", { class: "auth" },
     h("section", { class: "auth-brand" },
@@ -385,15 +430,27 @@ function authView() {
     ),
     h("section", { class: "auth-panel" },
       h("div", { class: "auth-card" },
-        h("h2", { text: login ? "Welcome back" : "Create a caregiver account" }),
-        h("p", { class: "muted", text: login ? "Sign in to continue." : "You'll join a patient's care team with an invite code from their clinician." }),
+        h("h2", { text: login ? "Welcome back" : state.regRole === "patient" ? "Create your patient account" : "Create a caregiver account" }),
+        h("p", { class: "muted", text: login ? "Sign in to continue." : "After signing up you'll ask a doctor for access. You can use the app once they approve." }),
         h("div", { class: "auth-tabs", role: "tablist" },
           h("button", { role: "tab", "aria-selected": String(login), onclick: () => ((state.authTab = "login"), (state.authError = ""), render()), text: "Sign in" }),
           h("button", { role: "tab", "aria-selected": String(!login), onclick: () => ((state.authTab = "register"), (state.authError = ""), render()), text: "Create account" }),
         ),
         state.authError && h("div", { class: "form-error", role: "alert", text: state.authError }),
         h("form", { onsubmit: onSubmit },
+          !login && h("div", { class: "field" },
+            h("label", { text: "I am" }),
+            h("div", { class: "auth-tabs role-tabs", role: "radiogroup" },
+              h("button", { type: "button", role: "radio", "aria-selected": String(state.regRole === "patient"), "aria-checked": String(state.regRole === "patient"), onclick: () => ((state.regRole = "patient"), render()), text: "The patient" }),
+              h("button", { type: "button", role: "radio", "aria-selected": String(state.regRole === "caregiver"), "aria-checked": String(state.regRole === "caregiver"), onclick: () => ((state.regRole = "caregiver"), render()), text: "Looking after someone" }),
+            ),
+          ),
           !login && h("div", { class: "field" }, h("label", { for: "name", text: "Full name" }), h("input", { class: "input", id: "name", name: "name", required: true, autocomplete: "name", maxlength: 80 })),
+          !login && state.regRole === "patient" && h("div", { class: "field" },
+            h("label", { for: "age", text: "Age" }),
+            h("input", { class: "input", id: "age", name: "age", type: "number", min: 0, max: 120, required: true }),
+            h("span", { class: "hint", text: "Some medicines need extra care at older ages." }),
+          ),
           h("div", { class: "field" }, h("label", { for: "username", text: "Username" }), h("input", { class: "input", id: "username", name: "username", required: true, autocomplete: "username", autocapitalize: "none", spellcheck: "false" })),
           h("div", { class: "field" },
             h("label", { for: "password", text: "Password" }),
@@ -405,7 +462,11 @@ function authView() {
         ),
         login && h("div", { class: "demo-box" },
           h("h4", { text: "Demo accounts" }),
-          h("div", { class: "demo-list" }, demos.map(([u, n, r]) => h("button", { type: "button", onclick: () => fill(u) }, h("strong", { text: n }), h("span", { text: r })))),
+          demos.map(([group, list]) => [
+            h("div", { class: "demo-group", text: group }),
+            h("div", { class: "demo-list" }, list.map(([u, n, r]) => h("button", { type: "button", onclick: () => fill(u) }, h("strong", { text: n }), h("span", { text: r })))),
+          ]),
+          h("p", { class: "hint", text: "Password for every demo account: <username>-demo" }),
         ),
       ),
     ),
@@ -428,10 +489,13 @@ function topbar() {
           h("span", {}, h("strong", { text: p.name }), " ", h("span", { class: "faint", text: `${p.age}` })),
           s?.patient.id === p.id && h("span", { class: "faint" }, icon("check", 14)),
         )),
-        state.user.kind === "Caregiver" && [h("hr"), h("button", { role: "menuitem", onclick: () => ((state.joining = true), (state.menu = false), render()) }, icon("key", 16), "Join with an invite code")],
+        state.user.kind !== "Clinician" && [h("hr"), h("button", { role: "menuitem", onclick: showRequests }, icon("plus", 16), state.user.kind === "Patient" ? "Add a doctor to my care team" : "Get access to someone else")],
       ),
     ),
     h("div", { class: "spacer" }),
+    h("button", { class: `btn ghost small ${state.view === "requests" ? "active" : ""}`, onclick: () => (state.view === "requests" ? ((state.view = "main"), render()) : showRequests()) },
+      icon("users", 16), h("span", { class: "name", text: state.user.kind === "Clinician" ? "Requests" : "Doctors & requests" }),
+      state.user.kind === "Clinician" && state.requests?.inbox?.length ? h("span", { class: "count", text: String(state.requests.inbox.length) }) : null),
     h("div", { class: "user-chip" },
       h("div", { class: "who" }, h("strong", { text: state.user.name }), h("span", { text: state.user.role })),
       h("span", { class: "avatar", text: initials(state.user.name) }),
@@ -440,15 +504,95 @@ function topbar() {
   );
 }
 
-function joinCard(withBack) {
-  return h("div", { class: "card card-pad center" },
-    h("h2", { text: withBack ? "Join another care team" : `Welcome, ${firstName(state.user.name)}` }),
-    h("p", { class: "muted", text: "You're not on any patient's care team yet. Ask a clinician on the patient's care team for an invite code, then enter it here. Codes work once and expire after 7 days." }),
-    h("form", { class: "check-form", onsubmit: (e) => (e.preventDefault(), joinWithCode(new FormData(e.target).get("code"))) },
-      h("input", { class: "input mono", name: "code", placeholder: "XXXX-XXXX", required: true, autocapitalize: "characters", "aria-label": "Invite code", maxlength: 9 }),
-      h("button", { class: "btn primary", type: "submit" }, icon("key", 16), "Join care team"),
+const STATUS_TEXT = { pending: "waiting", approved: "approved", rejected: "declined" };
+
+function requestsView() {
+  const clinician = state.user.kind === "Clinician";
+  const back = h("div", { class: "row-between" },
+    state.patients.length > 0 ? h("button", { class: "btn ghost small", onclick: () => ((state.view = "main"), render()) }, "← Back") : h("span"),
+    h("button", { class: "btn ghost small", onclick: showRequests, title: "Check for new answers" }, icon("memory", 14), "Refresh"),
+  );
+  if (!state.requests) return h("div", { class: "empty center" }, h("div", { class: "spinner" }));
+  if (clinician) {
+    const { inbox, patients } = state.requests;
+    return h("div", { class: "center wide" },
+      back,
+      h("h2", { text: "Access requests" }),
+      h("p", { class: "muted", text: "Patients asking you to join their care team, and family members asking for access to one of your patients. Approving creates the link in the graph; nobody gets access without you." }),
+      inbox.length === 0 && h("div", { class: "empty" }, icon("inbox", 32), h("p", { text: "No pending requests." })),
+      inbox.map((q) => {
+        const note = h("textarea", { class: "input", rows: 2, placeholder: "Note (required to decline)", "aria-label": "Note" });
+        const pick = q.kind === "caregiver" && h("select", { class: "input", "aria-label": "Which of your patients" },
+          h("option", { value: "", text: patients.length ? "Which of your patients is this?" : "You have no patients to link" }),
+          patients.map((p) => h("option", { value: p.id, text: `${p.name} (${p.age})`, selected: p.name.toLowerCase() === q.patient_name.toLowerCase() })));
+        return h("div", { class: "review-item" },
+          h("div", { class: "finding-head" },
+            h("span", { class: "avatar sm", text: initials(q.from_name) }),
+            h("strong", { text: q.from_name }),
+            h("span", { class: "chip", text: q.from_kind === "Patient" ? `Patient${q.from_age ? `, ${q.from_age}` : ""}` : "Family caregiver" }),
+            h("span", { class: "hint", text: day(q.created) }),
+          ),
+          h("p", { text: q.kind === "self" ? "Asks you to join their care team." : `Looks after “${q.patient_name}”${q.relation ? ` (${q.relation})` : ""} and asks for access.` }),
+          q.message && h("div", { class: "note", text: `“${q.message}”` }),
+          pick && h("div", { class: "field" }, h("label", { text: "Link to patient" }), pick),
+          note,
+          h("div", { class: "review-actions" },
+            h("button", { class: "btn success", onclick: () => (q.kind === "caregiver" && !pick.value ? toast("Pick which of your patients this is.", "error") : decideAccess(q, "approved", pick?.value || undefined, note.value.trim())) }, icon("check", 16), "Approve"),
+            h("button", { class: "btn danger", onclick: () => (note.value.trim() ? decideAccess(q, "rejected", undefined, note.value.trim()) : (note.focus(), toast("Add a reason before declining.", "error"))) }, icon("stop", 16), "Decline"),
+          ),
+        );
+      }),
+    );
+  }
+  const patient = state.user.kind === "Patient";
+  const docs = state.clinicians || [];
+  const chosen = docs.find((d) => d.id === state.reqDoctor);
+  return h("div", { class: "center wide" },
+    back,
+    h("h2", { text: state.patients.length ? "Doctors & requests" : `Welcome, ${firstName(state.user.name)}` }),
+    h("p", { class: "muted", text: patient
+      ? "Choose a doctor to add to your care team. Once they approve, they can review your safety checks and update your record."
+      : "Choose the doctor of the person you look after. Once they approve, you can check medicines for that person." }),
+    h("input", { class: "input doc-search", type: "search", placeholder: `Search ${docs.length} doctors by name or specialty, e.g. "neuro"`, "aria-label": "Search doctors",
+      oninput: (e) => {
+        // Filter in place (no re-render) so typing keeps focus.
+        const q = e.target.value.trim().toLowerCase();
+        let shown = 0;
+        for (const card of document.querySelectorAll(".doc-grid .patient-card")) {
+          const hit = !q || card.dataset.search.includes(q);
+          card.classList.toggle("hidden", !hit);
+          shown += hit;
+        }
+        document.querySelector(".doc-none").classList.toggle("hidden", shown > 0);
+      } }),
+    h("p", { class: "muted doc-none hidden", text: "No doctor matches that search." }),
+    h("div", { class: "patient-grid doc-grid" },
+      docs.map((d) => h("button", { class: `patient-card ${state.reqDoctor === d.id ? "selected" : ""}`, "data-search": `${d.name} ${d.role}`.toLowerCase(), onclick: () => ((state.reqDoctor = d.id), render()) },
+        h("span", { class: "avatar lg", text: initials(d.name) }),
+        h("span", {}, h("strong", { text: d.name }), h("span", { class: "muted", text: d.role }), h("span", { class: "hint", text: `${d.patients} patient${d.patients === 1 ? "" : "s"}` })),
+      )),
     ),
-    withBack && h("p", {}, h("button", { class: "btn ghost small", onclick: () => ((state.joining = false), render()), text: "← Back" })),
+    chosen && h("form", { class: "card card-pad request-form", onsubmit: (e) => (e.preventDefault(), sendRequest(e.target)) },
+      h("h3", { text: `Request ${chosen.name}` }),
+      !patient && h("div", { class: "two" },
+        h("div", { class: "field" }, h("label", { for: "patient_name", text: "Who do you look after?" }), h("input", { class: "input", id: "patient_name", name: "patient_name", required: true, placeholder: "Their full name", maxlength: 80 })),
+        h("div", { class: "field" }, h("label", { for: "relation", text: "Your relationship" }), h("input", { class: "input", id: "relation", name: "relation", placeholder: "e.g. daughter", maxlength: 40 })),
+      ),
+      h("div", { class: "field" }, h("label", { for: "message", text: "Message (optional)" }), h("textarea", { class: "input", id: "message", name: "message", rows: 2, maxlength: 500 })),
+      h("button", { class: "btn primary", type: "submit" }, icon("send", 16), "Send request"),
+    ),
+    h("h3", { class: "spaced", text: "Your requests" }),
+    !state.requests.mine.length && h("p", { class: "muted", text: "None yet." }),
+    h("ul", { class: "timeline" },
+      state.requests.mine.map((r) => h("li", {},
+        h("div", { class: "date", text: day(r.created) }),
+        h("div", {},
+          h("div", { class: "row" }, h("strong", { text: r.clinician }), h("span", { class: `status ${r.status}`, text: STATUS_TEXT[r.status] || r.status })),
+          h("div", { class: "hint", text: r.kind === "self" ? "Join my care team" : `Access to ${r.patient || r.patient_name}` }),
+          r.note && h("div", { class: "note", text: r.note }),
+        ),
+      )),
+    ),
   );
 }
 
@@ -468,35 +612,80 @@ function pickerView() {
 function sidebar() {
   const p = state.patient;
   const clinician = state.user.kind === "Clinician";
+  const drugs = state.catalog?.drugs || [];
   return h("aside", { class: "side" },
     h("div", { class: "card" },
-      h("div", { class: "card-head" }, h("h3", { text: "Current medicines" }), h("span", { class: "chip", text: String(p.medications.length) })),
+      h("div", { class: "card-head" },
+        h("h3", { text: "Current medicines" }),
+        h("button", { class: "btn small", onclick: () => ((state.editing = state.editing === "med" ? null : "med"), render()) }, icon("plus", 14), "Add"),
+      ),
+      state.editing === "med" && h("form", { class: "card-pad edit-form", onsubmit: (e) => {
+        e.preventDefault();
+        const f = new FormData(e.target);
+        state.pendingAdd = { drug: String(f.get("drug")).trim(), dose: String(f.get("dose") || "").trim() };
+        state.editing = null;
+        runCheck(state.pendingAdd.drug); // safety check first; adding is a separate, informed click
+      } },
+        h("input", { class: "input", name: "drug", list: "drug-list", placeholder: "Medicine", required: true, "aria-label": "Medicine" }),
+        h("input", { class: "input", name: "dose", placeholder: "Dose, e.g. 500 mg twice daily", "aria-label": "Dose", maxlength: 60 }),
+        h("p", { class: "hint", text: clinician ? "Added as a prescription from you." : "Added as over the counter. Prescriptions are added by the doctor." }),
+        h("button", { class: "btn primary small", type: "submit", text: "Check safety first" }),
+      ),
+      p.medications.length === 0 && h("p", { class: "card-pad muted", text: "No medicines recorded yet." }),
       h("ul", { class: "med-list" },
         p.medications.map((m) => h("li", {},
           h("span", { class: "pill-icon" }, icon("pill", 16)),
-          h("div", {},
+          h("div", { class: "grow" },
             h("strong", {}, m.brand, m.otc ? h("span", { class: "otc", text: "OTC" }) : null),
             h("div", { class: "sub", text: `${m.drug} · ${m.dose}` }),
-            h("div", { class: "sub faint", text: m.prescriber ? `Prescribed by ${m.prescriber}` : "Over the counter" }),
+            h("div", { class: "sub faint", text: m.prescriber ? `Prescribed by ${m.prescriber}` : m.added_by ? `Added by ${m.added_by}` : "Over the counter" }),
           ),
+          (clinician || m.otc) && h("button", { class: "btn ghost small", title: `Stop ${m.brand}`, "aria-label": `Stop ${m.brand}`,
+            onclick: () => editRecord("/patient/medications/stop", { drug: m.drug_id }, (x) => `Stopped ${x.drug}.`).then(render) }, "Stop"),
         )),
       ),
     ),
+    h("datalist", { id: "drug-list" }, drugs.map((d) => h("option", { value: d.brand, label: d.name }))),
     h("div", { class: "card" },
-      h("div", { class: "card-head" }, h("h3", { text: "Care team" }), clinician && h("button", { class: "btn small", onclick: makeInvite }, icon("plus", 14), "Invite")),
-      state.invite && h("div", { class: "card-pad" },
-        h("div", { class: "hint", text: `One-time code for a caregiver of ${state.invite.patient}` }),
-        h("div", { class: "invite-code", text: state.invite.code }),
-        h("div", { class: "status-line" },
-          h("span", { text: `Expires ${day(state.invite.expires)}` }),
-          h("button", { class: "btn small", onclick: () => navigator.clipboard?.writeText(state.invite.code).then(() => toast("Code copied.")) }, icon("copy", 14), "Copy"),
-        ),
-      ),
+      h("div", { class: "card-head" }, h("h3", { text: "Care team" })),
       h("ul", { class: "team-list" },
         p.care_team.map((c) => h("li", {}, h("span", { class: "avatar sm", text: initials(c.name) }), h("div", {}, h("strong", { text: c.name }), h("span", { text: c.role })))),
+        p.care_team.length === 0 && h("li", { class: "muted", text: "No doctor yet." }),
       ),
+      !clinician && h("div", { class: "card-pad" }, h("button", { class: "btn small block", onclick: showRequests }, icon("plus", 14), "Request a doctor")),
     ),
   );
+}
+
+function recordEditors() {
+  const clinician = state.user.kind === "Clinician";
+  const cat = state.catalog || { conditions: [], allergens: [] };
+  if (state.editing === "allergy")
+    return h("form", { class: "inline-form", onsubmit: (e) => {
+      e.preventDefault();
+      const f = new FormData(e.target);
+      editRecord("/patient/allergies", { allergen_id: f.get("allergen"), reaction: f.get("reaction") }, (x) => `Allergy to ${x.name} recorded.`).then(render);
+    } },
+      h("select", { class: "input", name: "allergen", required: true, "aria-label": "Allergic to" },
+        h("option", { value: "", text: "Allergic to…" }),
+        h("optgroup", { label: "Drug classes" }, cat.allergens.filter((a) => a.kind === "DrugClass").map((a) => h("option", { value: a.id, text: a.name }))),
+        h("optgroup", { label: "Ingredients" }, cat.allergens.filter((a) => a.kind === "Ingredient").map((a) => h("option", { value: a.id, text: a.name }))),
+      ),
+      h("input", { class: "input", name: "reaction", placeholder: "Reaction, e.g. hives", maxlength: 80, "aria-label": "Reaction" }),
+      h("button", { class: "btn primary small", type: "submit", text: "Save" }),
+      h("button", { class: "btn ghost small", type: "button", onclick: () => ((state.editing = null), render()), text: "Cancel" }),
+    );
+  if (state.editing === "condition" && clinician)
+    return h("form", { class: "inline-form", onsubmit: (e) => {
+      e.preventDefault();
+      editRecord("/patient/conditions", { condition_id: new FormData(e.target).get("condition") }, (x) => `${x.name} recorded.`).then(render);
+    } },
+      h("select", { class: "input", name: "condition", required: true, "aria-label": "Condition" },
+        h("option", { value: "", text: "Condition…" }), cat.conditions.map((c) => h("option", { value: c.id, text: c.name }))),
+      h("button", { class: "btn primary small", type: "submit", text: "Save" }),
+      h("button", { class: "btn ghost small", type: "button", onclick: () => ((state.editing = null), render()), text: "Cancel" }),
+    );
+  return null;
 }
 
 function pathView(path) {
@@ -569,6 +758,21 @@ function checkResult() {
         h("p", { class: "hint", text: "Ask the clinician before switching." }),
       ),
     ),
+    state.pendingAdd && [c.drug.brand, c.drug.name].some((n) => n?.toLowerCase() === state.pendingAdd.drug.toLowerCase()) &&
+      h("div", { class: "callout add-confirm" },
+        icon(c.level === "stop" || c.level === "caution" ? "alert" : "plus"),
+        h("div", { class: "grow" },
+          h("strong", { text: c.level === "stop" || c.level === "caution" ? `Add ${label} to the list anyway?` : `Add ${label} to the medicine list?` }),
+          h("div", { class: "hint", text: c.level === "stop" || c.level === "caution" ? "Recording it keeps every future check accurate. Please talk to the care team about the warnings above." : `Dose: ${state.pendingAdd.dose || "as directed"}` }),
+        ),
+        h("button", { class: "btn primary small", onclick: async () => {
+          const add = state.pendingAdd;
+          state.pendingAdd = null;
+          await editRecord("/patient/medications", add, (x) => `Added ${x.drug}${x.prescribed ? " as a prescription" : ""}.`);
+          render();
+        } }, "Add to medicine list"),
+        h("button", { class: "btn ghost small", onclick: () => ((state.pendingAdd = null), render()), text: "Not now" }),
+      ),
     h("div", { class: "status-line" },
       h("span", {}, "Saved as ", h("span", { class: "mono", text: c.actionId }), " · ", h("span", { class: "status pending", text: "waiting for clinician review" })),
       h("span", { class: "faint", text: "Decision aid on demo data, not medical advice." }),
@@ -581,7 +785,6 @@ function checkTab() {
   return [
     h("form", { class: "check-form", onsubmit: (e) => (e.preventDefault(), runCheck(new FormData(e.target).get("drug"))) },
       h("input", { class: "input", name: "drug", list: "drug-list", placeholder: "Medicine name or brand, e.g. Advil", "aria-label": "Medicine to check", autocomplete: "off", required: true }),
-      h("datalist", { id: "drug-list" }, state.drugs.map((d) => h("option", { value: d.brand, label: d.name }))),
       h("button", { class: "btn primary", type: "submit", disabled: state.checking }, state.checking ? h("span", { class: "spinner" }) : icon("shield", 16), "Check safety"),
     ),
     h("div", { class: "quick" }, h("span", { class: "label", text: "Try:" }), quick.map((q) => h("button", { class: "chip clickable", type: "button", onclick: () => runCheck(q), text: q }))),
@@ -679,7 +882,11 @@ function workspace() {
         h("div", { class: "chips" },
           p.conditions.map((c) => h("span", { class: "chip condition", text: c })),
           p.allergies.map((a) => h("span", { class: "chip allergy" }, icon("alert", 12), `Allergy: ${a}`)),
+          p.conditions.length + p.allergies.length === 0 && h("span", { class: "chip", text: "No conditions or allergies recorded" }),
+          h("button", { class: "chip clickable", onclick: () => ((state.editing = "allergy"), render()) }, icon("plus", 12), "Allergy"),
+          clinician && h("button", { class: "chip clickable", onclick: () => ((state.editing = "condition"), render()) }, icon("plus", 12), "Condition"),
         ),
+        recordEditors(),
       ),
       h("div", { class: "session-id" }, "Session ", h("span", { class: "mono", text: s.id }), h("br"), `Signed in as ${state.user.role.toLowerCase()}`),
     ),
@@ -704,7 +911,7 @@ function render() {
   else if (!state.user) view = authView();
   else {
     let main;
-    if (state.joining || state.patients.length === 0) main = h("main", { class: "page" }, joinCard(state.patients.length > 0));
+    if (state.view === "requests" || state.patients.length === 0) main = h("main", { class: "page" }, requestsView());
     else if (!state.session || !state.patient) main = h("main", { class: "page" }, pickerView());
     else main = workspace();
     view = [topbar(), main];

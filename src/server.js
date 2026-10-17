@@ -292,6 +292,23 @@ export async function startServer({ port = Number(process.env.PORT || 8787), hos
   return server;
 }
 
+// Serverless hosts (Vercel) import this module and call the default export per request.
+// The FalkorDB connection is opened on the first request and reused while the instance is warm.
+let serverless;
+export default async function handler(req, res) {
+  serverless ??= connect().then(({ graph }) => createApp(graph, { llm: createLLM(), log: console.log }));
+  let app;
+  try {
+    app = await serverless;
+  } catch (e) {
+    serverless = undefined;
+    console.error(e.message);
+    res.writeHead(503, { "content-type": "application/json" });
+    return res.end(JSON.stringify({ error: { code: "db_unavailable", message: "The database is unreachable. Try again shortly." } }));
+  }
+  return app(req, res);
+}
+
 // `npm start`
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   let db, graph;
